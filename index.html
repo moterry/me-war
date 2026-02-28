@@ -337,15 +337,13 @@
         // ========== CONFIG ==========
         const CONFIG = {
             refreshInterval: 5 * 60 * 1000, // 5 minutes
+            // Keywords to filter war-related news
+            keywords: ['Israel', 'Iran', 'Israeli', 'Iranian', 'Middle East', 'Gaza', 'Lebanon', 'Syria', 'Strike', 'Attack', 'War', 'Military', 'Tehran', 'Pentagon', 'Trump', 'Biden', 'Hezbollah', 'Hamas', 'Biden'],
             newsSources: {
                 en: [
+                    { name: 'Google News', url: 'https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx1YlY4U0FtVnVHZ0pWVXlnQVAB?hl=en-US&gl=US&ceid=US%3Aen' },
                     { name: 'BBC', url: 'https://feeds.bbci.co.uk/news/world/middle_east/rss.xml' },
-                    { name: 'Reuters', url: 'https://www.reutersagency.com/feed/?best-regions=middle-east' },
-                    { name: 'Al Jazeera', url: 'https://www.aljazeera.com/xml/rss/all.xml' }
-                ],
-                zh: [
-                    { name: '新华社', url: 'https://www.xinhuanet.com/world/news_middleeast.xml' },
-                    { name: '央视新闻', url: 'https://news.cctv.com/world/rss.xml' }
+                    { name: 'AP', url: 'https://feeds.apnews.com/apnews/topnews' }
                 ]
             }
         };
@@ -463,14 +461,23 @@
                 const data = await response.json();
                 
                 if (data.status === 'ok' && data.items) {
-                    return data.items.slice(0, 10).map(item => ({
-                        title: item.title,
-                        summary: item.description?.replace(/<[^>]*>/g, '').substring(0, 150) + '...',
-                        link: item.link,
-                        pubDate: item.pubDate,
-                        source: sourceName,
-                        lang: 'en'
-                    }));
+                    return data.items
+                        .filter(item => {
+                            const title = item.title.toLowerCase();
+                            const desc = (item.description || '').toLowerCase();
+                            const text = title + ' ' + desc;
+                            // Filter by keywords
+                            return CONFIG.keywords.some(kw => text.includes(kw.toLowerCase()));
+                        })
+                        .slice(0, 10)
+                        .map(item => ({
+                            title: item.title,
+                            summary: item.description?.replace(/<[^>]*>/g, '').substring(0, 150) + '...',
+                            link: item.link,
+                            pubDate: item.pubDate,
+                            source: sourceName,
+                            lang: 'en'
+                        }));
                 }
             } catch (e) {
                 console.error(`Failed to fetch ${sourceName}:`, e);
@@ -478,9 +485,34 @@
             return [];
         }
 
-        async function fetchXinhua() {
+        // Fallback: fetch from Google News with Middle East topic
+        async function fetchGoogleNewsMiddleEast() {
             try {
-                const response = await fetch('https://api.rss2json.com/v1/api.json?rss_url=https://www.xinhuanet.com/world/news_middleeast.xml');
+                const url = 'https://news.google.com/rss/search?q=Israel%20OR%20Iran%20OR%20Middle%20East%20war&hl=en-US&gl=US&ceid=US%3Aen';
+                const rssUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}`;
+                const response = await fetch(rssUrl);
+                const data = await response.json();
+                
+                if (data.status === 'ok' && data.items) {
+                    return data.items.slice(0, 15).map(item => ({
+                        title: item.title,
+                        summary: item.description?.replace(/<[^>]*>/g, '').substring(0, 150) + '...',
+                        link: item.link,
+                        pubDate: item.pubDate,
+                        source: 'Google News',
+                        lang: 'en'
+                    }));
+                }
+            } catch (e) {
+                console.error('Failed to fetch Google News:', e);
+            }
+            return [];
+        }
+
+        async function fetchXinhua() {
+            // Xinhua is blocked, use alternative
+            try {
+                const response = await fetch('https://api.rss2json.com/v1/api.json?rss_url=https://news.google.com/rss/search?q=China%20Middle%20East&hl=zh-CN&gl=CN&ceid=CN%3Azh');
                 const data = await response.json();
                 
                 if (data.status === 'ok' && data.items) {
@@ -489,34 +521,18 @@
                         summary: item.description?.replace(/<[^>]*>/g, '').substring(0, 150) + '...',
                         link: item.link,
                         pubDate: item.pubDate,
-                        source: '新华社',
+                        source: '中文',
                         lang: 'zh'
                     }));
                 }
             } catch (e) {
-                console.error('Failed to fetch Xinhua:', e);
+                console.error('Failed to fetch Chinese news:', e);
             }
             return [];
         }
 
         async function fetchCCTV() {
-            try {
-                const response = await fetch('https://api.rss2json.com/v1/api.json?rss_url=https://news.cctv.com/world/rss.xml');
-                const data = await response.json();
-                
-                if (data.status === 'ok' && data.items) {
-                    return data.items.slice(0, 10).map(item => ({
-                        title: item.title,
-                        summary: item.description?.replace(/[^中]*/</?[^>]*>/g, '').substring(0, 150) + '...',
-                        link: item.link,
-                        pubDate: item.pubDate,
-                        source: '央视新闻',
-                        lang: 'zh'
-                    }));
-                }
-            } catch (e) {
-                console.error('Failed to fetch CCTV:', e);
-            }
+            // CCTV is blocked, return empty
             return [];
         }
 
@@ -531,12 +547,23 @@
                 promises.push(fetchRSS(source.url, source.name));
             });
             
-            // Chinese sources
+            // Google News search for more comprehensive coverage
+            promises.push(fetchGoogleNewsMiddleEast());
+            
+            // Chinese sources (fallback to Google News in Chinese)
             promises.push(fetchXinhua());
-            promises.push(fetchCCTV());
 
             const results = await Promise.all(promises);
             newsData = results.flat().filter(n => n && n.title);
+
+            // Remove duplicates based on title
+            const seen = new Set();
+            newsData = newsData.filter(item => {
+                const key = item.title.toLowerCase().substring(0, 50);
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
 
             // Sort by date
             newsData.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
